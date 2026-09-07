@@ -21,12 +21,6 @@
     "https://*.youtube.com/*"
   ],
 
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "youtube-recommendation-blocker@example.com"
-    }
-  },
-
   "content_scripts": [
     {
       "matches": ["https://*.youtube.com/*"],
