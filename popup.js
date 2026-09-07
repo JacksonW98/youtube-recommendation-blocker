@@ -7,7 +7,6 @@ const decayDaysValue = document.getElementById("decayDaysValue");
 const decayDaysDisplay = document.getElementById("decayDaysDisplay");
 const pauseTrackingToggle = document.getElementById("pauseTrackingToggle");
 const pauseBlockingToggle = document.getElementById("pauseBlockingToggle");
-const viewBlockedBtn = document.getElementById("viewBlockedBtn");
 const viewAllowlistBtn = document.getElementById("viewAllowlistBtn");
 const exportDataBtn = document.getElementById("exportDataBtn");
 const importDataBtn = document.getElementById("importDataBtn");
@@ -195,13 +194,6 @@ if (pauseTrackingToggle) {
 if (pauseBlockingToggle) {
   pauseBlockingToggle.addEventListener("change", (e) => {
     setPauseStates({ pauseTracking: !!(pauseTrackingToggle && pauseTrackingToggle.checked), pauseBlocking: !!e.target.checked });
-  });
-}
-
-if (viewBlockedBtn) {
-  viewBlockedBtn.addEventListener("click", () => {
-    const url = chrome.runtime.getURL("blocked-videos.html");
-    chrome.windows.create({ url, width: 700, height: 800, type: "popup" });
   });
 }
 

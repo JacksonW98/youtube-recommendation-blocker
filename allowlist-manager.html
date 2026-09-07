@@ -54,40 +54,45 @@
       padding: 16px;
     }
 
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
     .section h2 {
       font-size: 14px;
       font-weight: 600;
       color: #333;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: #6b7280;
       margin-bottom: 12px;
+      line-height: 1.5;
     }
 
-    .add-form {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 16px;
-    }
-
-    .add-form input {
-      flex: 1;
-      padding: 8px 12px;
-      border: 1px solid #d1d5db;
-      border-radius: 4px;
-      font-size: 13px;
-    }
-
-    .add-form button {
-      padding: 8px 12px;
-      background: #065fd4;
-      color: white;
+    .btn-reset {
+      padding: 6px 10px;
+      background: #fee2e2;
+      color: #991b1b;
       border: none;
       border-radius: 4px;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
     }
 
-    .add-form button:hover {
-      background: #0445a0;
+    .btn-reset:hover {
+      background: #fecaca;
+    }
+
+    .btn-reset:disabled {
+      background: #f3f4f6;
+      color: #9ca3af;
+      cursor: default;
     }
 
     .item-list {
@@ -156,29 +161,6 @@
       font-size: 13px;
     }
 
-    .button-row {
-      display: flex;
-      gap: 8px;
-    }
-
-    .button-row button {
-      flex: 1;
-    }
-
-    .btn-secondary {
-      padding: 8px 12px;
-      background: #4b5563;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-    }
-
-    .btn-secondary:hover {
-      background: #374151;
-    }
   </style>
 </head>
 <body>
@@ -189,34 +171,24 @@
     </div>
 
     <div class="section">
-      <h2>Backup</h2>
-      <div class="button-row">
-        <button class="btn-secondary" id="exportDataBtn">Export data</button>
-        <button class="btn-secondary" id="importDataBtn">Import data</button>
+      <div class="section-header">
+        <h2>Allowlisted Channels</h2>
+        <button class="btn-reset" id="clearChannelsBtn">Reset channels</button>
       </div>
-      <input type="file" id="dataImportInput" accept="application/json,.json" style="display:none;" />
-      <div class="empty-state" id="dataStatus" style="padding: 12px 0 0;">Export or import all extension data here.</div>
-    </div>
-
-    <div class="section">
-      <h2>Allowlisted Videos</h2>
-      <div class="add-form">
-        <input type="text" id="videoInput" placeholder="Paste video ID here (found in YouTube URL as 'v=xxxxx')" />
-        <button id="addVideoBtn">Add video</button>
-      </div>
-      <div class="item-list" id="videoList">
-        <div class="empty-state">No allowlisted videos</div>
-      </div>
-    </div>
-
-    <div class="section">
-      <h2>Allowlisted Channels</h2>
-      <div class="add-form">
-        <input type="text" id="channelInput" placeholder="Paste channel ID here (from channel URL as '@channelname' or 'channel/UCxxxxx')" />
-        <button id="addChannelBtn">Add channel</button>
-      </div>
+      <div class="hint">Videos from these channels are never hidden. Add one with the "C" button on any thumbnail.</div>
       <div class="item-list" id="channelList">
         <div class="empty-state">No allowlisted channels</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <h2>Allowlisted Videos</h2>
+        <button class="btn-reset" id="clearVideosBtn">Reset videos</button>
+      </div>
+      <div class="hint">These videos are never hidden. Add one with the "V" button on any thumbnail.</div>
+      <div class="item-list" id="videoList">
+        <div class="empty-state">No allowlisted videos</div>
       </div>
     </div>
   </div>

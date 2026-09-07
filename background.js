@@ -293,11 +293,30 @@ async function removeAllowlist(type, id) {
   }
 }
 
-function broadcastAllowlistUpdate() {
+async function clearAllowlist(type) {
+  // Load both lists first so the broadcast below never sends a stale empty list.
+  await getAllowlists();
+
+  if (type === "video") {
+    allowlistedVideos = [];
+    await chrome.storage.local.set({ allowlistedVideos });
+  } else if (type === "channel") {
+    allowlistedChannels = [];
+    await chrome.storage.local.set({ allowlistedChannels });
+  } else {
+    return;
+  }
+
+  broadcastAllowlistUpdate();
+}
+
+async function broadcastAllowlistUpdate() {
+  const lists = await getAllowlists();
+
   broadcastToYouTubeTabs({
     action: "allowlistUpdated",
-    videos: allowlistedVideos || [],
-    channels: allowlistedChannels || []
+    videos: lists.videos,
+    channels: lists.channels
   });
 }
 
@@ -428,6 +447,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === "removeAllowlist") {
     removeAllowlist(message.type, message.id).then(() => {
+      sendResponse({ success: true });
+    });
+    return true;
+  } else if (message.action === "clearAllowlist") {
+    clearAllowlist(message.type).then(() => {
       sendResponse({ success: true });
     });
     return true;

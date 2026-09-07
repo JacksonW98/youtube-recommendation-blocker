@@ -134,63 +134,56 @@ function extractVideoTitle(card) {
   return "Video";
 }
 
-function extractChannelInfo(card) {
-  const channelLink = card.querySelector(
-    "a#channel-name, a.yt-simple-endpoint[href*='/channel/'], a.yt-simple-endpoint[href*='/@']"
-  );
-
-  if (!channelLink || !channelLink.href) {
-    return null;
-  }
-
-  let channelId = null;
+function parseChannelId(href) {
   try {
-    const url = new URL(channelLink.href, window.location.origin);
+    const url = new URL(href, window.location.origin);
     const channelMatch = url.pathname.match(/\/channel\/([^/?]+)/);
     const handleMatch = url.pathname.match(/\/@([^/?]+)/);
-    channelId = channelMatch?.[1] || handleMatch?.[1] || null;
-  } catch (e) {
-    channelId = null;
-  }
 
-  if (!channelId) {
+    return channelMatch?.[1] || handleMatch?.[1] || null;
+  } catch (e) {
     return null;
   }
-
-  const channelName = channelLink.textContent?.trim() || channelLink.getAttribute("aria-label") || channelId;
-
-  return { channelId, channelName };
 }
 
-function ensureAllowButtons(card, videoId, videoName, channelInfo) {
-  let buttonContainer = card.querySelector(".yt-extension-allow-buttons");
+function extractChannelInfo(card) {
+  // Match on href rather than class/id
+  const channelLinks = card.querySelectorAll("a[href*='/@'], a[href*='/channel/']");
 
-  if (buttonContainer) {
-    return;
+  let fallback = null;
+
+  for (const link of channelLinks) {
+    if (!link.href) {
+      continue;
+    }
+
+    const channelId = parseChannelId(link.href);
+
+    if (!channelId) {
+      continue;
+    }
+
+    const channelName = link.textContent?.trim() || link.getAttribute("aria-label")?.trim() || "";
+
+    if (channelName) {
+      return { channelId, channelName };
+    }
+
+    if (!fallback) {
+      fallback = { channelId, channelName: channelId };
+    }
   }
 
-  const badgeHost = card.querySelector("#thumbnail") || card;
+  return fallback;
+}
 
-  if (getComputedStyle(badgeHost).position === "static") {
-    badgeHost.style.position = "relative";
-  }
+function createAllowButton(className, label, title) {
+  const button = document.createElement("button");
 
-  buttonContainer = document.createElement("div");
-  buttonContainer.className = "yt-extension-allow-buttons";
-  buttonContainer.style.cssText = `
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    z-index: 9998;
-    display: flex;
-    gap: 4px;
-    pointer-events: auto;
-  `;
-
-  // Allow video button
-  const allowVideoBtn = document.createElement("button");
-  allowVideoBtn.title = "Allow this video";
-  allowVideoBtn.style.cssText = `
+  button.className = className;
+  button.textContent = label;
+  button.title = title;
+  button.style.cssText = `
     width: 24px;
     height: 24px;
     padding: 0;
@@ -206,50 +199,63 @@ function ensureAllowButtons(card, videoId, videoName, channelInfo) {
     justify-content: center;
     transition: background 0.2s;
   `;
-  allowVideoBtn.textContent = "V";
-  allowVideoBtn.addEventListener("mouseenter", () => {
-    allowVideoBtn.style.background = "rgba(0, 0, 0, 0.9)";
+  button.addEventListener("mouseenter", () => {
+    button.style.background = "rgba(0, 0, 0, 0.9)";
   });
-  allowVideoBtn.addEventListener("mouseleave", () => {
-    allowVideoBtn.style.background = "rgba(0, 0, 0, 0.7)";
-  });
-  allowVideoBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    chrome.runtime.sendMessage({ action: "addAllowlistVideo", videoId, videoName });
-    allowVideoBtn.style.opacity = "0.5";
-    allowVideoBtn.disabled = true;
+  button.addEventListener("mouseleave", () => {
+    button.style.background = "rgba(0, 0, 0, 0.7)";
   });
 
-  buttonContainer.appendChild(allowVideoBtn);
+  return button;
+}
 
-  // Allow channel button
-  if (channelInfo?.channelId) {
-    const allowChannelBtn = document.createElement("button");
-    allowChannelBtn.title = "Allow channel";
-    allowChannelBtn.style.cssText = `
-      width: 24px;
-      height: 24px;
-      padding: 0;
-      border: none;
-      border-radius: 3px;
-      background: rgba(0, 0, 0, 0.7);
-      color: #fff;
-      font-size: 12px;
-      font-weight: bold;
-      cursor: pointer;
+function ensureAllowButtons(card, videoId, videoName, channelInfo) {
+  let buttonContainer = card.querySelector(".yt-extension-allow-buttons");
+
+  if (buttonContainer && buttonContainer.dataset.ytExtVideoId !== videoId) {
+    buttonContainer.remove();
+    buttonContainer = null;
+  }
+
+  if (!buttonContainer) {
+    const badgeHost = card.querySelector("#thumbnail") || card;
+
+    if (getComputedStyle(badgeHost).position === "static") {
+      badgeHost.style.position = "relative";
+    }
+
+    buttonContainer = document.createElement("div");
+    buttonContainer.className = "yt-extension-allow-buttons";
+    buttonContainer.dataset.ytExtVideoId = videoId;
+    buttonContainer.style.cssText = `
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 9998;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.2s;
+      gap: 4px;
+      pointer-events: auto;
     `;
-    allowChannelBtn.textContent = "C";
-    allowChannelBtn.addEventListener("mouseenter", () => {
-      allowChannelBtn.style.background = "rgba(0, 0, 0, 0.9)";
+
+    const allowVideoBtn = createAllowButton("yt-extension-allow-video", "V", "Allow this video");
+
+    allowVideoBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      chrome.runtime.sendMessage({ action: "addAllowlistVideo", videoId, videoName });
+      allowVideoBtn.style.opacity = "0.5";
+      allowVideoBtn.disabled = true;
     });
-    allowChannelBtn.addEventListener("mouseleave", () => {
-      allowChannelBtn.style.background = "rgba(0, 0, 0, 0.7)";
-    });
+
+    buttonContainer.appendChild(allowVideoBtn);
+    badgeHost.appendChild(buttonContainer);
+  }
+
+  // The channel row hydrates after the thumbnail, so the "C" button usually has
+  // to be added on a later pass than the "V" button.
+  if (channelInfo?.channelId && !buttonContainer.querySelector(".yt-extension-allow-channel")) {
+    const allowChannelBtn = createAllowButton("yt-extension-allow-channel", "C", "Allow channel");
+
     allowChannelBtn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -264,8 +270,6 @@ function ensureAllowButtons(card, videoId, videoName, channelInfo) {
 
     buttonContainer.appendChild(allowChannelBtn);
   }
-
-  badgeHost.appendChild(buttonContainer);
 }
 
 function updateCountBadge(card, count) {
@@ -605,6 +609,16 @@ async function processVideos() {
       }
 
       if (card.dataset.ytExtRenderedVideoId === videoId) {
+        // Already counted, but the channel row may have rendered since this card
+        // was first processed, so give the "C" button another chance to appear.
+        if (!card.querySelector(".yt-extension-allow-channel")) {
+          const lateChannelInfo = extractChannelInfo(card);
+
+          if (lateChannelInfo?.channelId) {
+            ensureAllowButtons(card, videoId, extractVideoTitle(card), lateChannelInfo);
+          }
+        }
+
         continue;
       }
 
