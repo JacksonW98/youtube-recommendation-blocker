@@ -17,6 +17,72 @@ let isProcessing = false;
 let hasPendingRun = false;
 let saveTimer = null;
 let processTimer = null;
+let extensionInvalidated = false;
+
+// Reloading, updating, or disabling the extension orphans this script in any
+// already-open tab: it keeps running, but every chrome.* call throws
+// "Extension context invalidated". chrome.runtime.id goes undefined at that
+// point, which is the cheapest way to notice.
+function isExtensionAlive() {
+  if (extensionInvalidated) {
+    return false;
+  }
+
+  try {
+    return Boolean(chrome.runtime && chrome.runtime.id);
+  } catch (e) {
+    return false;
+  }
+}
+
+// Stop cleanly and hand the page back to YouTube, rather than retrying forever
+// and leaving videos hidden that nothing is left alive to restore.
+function handleInvalidatedContext() {
+  if (extensionInvalidated) {
+    return;
+  }
+
+  extensionInvalidated = true;
+
+  clearTimeout(saveTimer);
+  clearTimeout(processTimer);
+
+  try {
+    observer.disconnect();
+    window.removeEventListener("yt-navigate-finish", runPass);
+  } catch (e) {}
+
+  deactivate();
+}
+
+function sendMessageSafely(message, callback) {
+  if (!isExtensionAlive()) {
+    handleInvalidatedContext();
+
+    if (callback) {
+      callback(null);
+    }
+
+    return;
+  }
+
+  try {
+    chrome.runtime.sendMessage(message, (response) => {
+      // lastError covers the service worker being asleep or restarting.
+      const failed = chrome.runtime.lastError;
+
+      if (callback) {
+        callback(failed ? null : response);
+      }
+    });
+  } catch (e) {
+    handleInvalidatedContext();
+
+    if (callback) {
+      callback(null);
+    }
+  }
+}
 
 function log(...args) {
   if (DEBUG) {
@@ -278,7 +344,7 @@ function ensureAllowButtons(card, videoId, videoName, channelInfo) {
     allowVideoBtn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      chrome.runtime.sendMessage({ action: "addAllowlistVideo", videoId, videoName });
+      sendMessageSafely({ action: "addAllowlistVideo", videoId, videoName });
       allowVideoBtn.style.opacity = "0.5";
       allowVideoBtn.disabled = true;
     });
@@ -295,7 +361,7 @@ function ensureAllowButtons(card, videoId, videoName, channelInfo) {
     allowChannelBtn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      chrome.runtime.sendMessage({
+      sendMessageSafely({
         action: "addAllowlistChannel",
         channelId: channelInfo.channelId,
         channelName: channelInfo.channelName
@@ -321,48 +387,30 @@ function updateCountBadge(card, count) {
 
 async function getCounts() {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ action: "getCounts" }, (response) => {
-      if (chrome.runtime.lastError || !response) {
-        resolve({});
-        return;
-      }
-
-      resolve(response.counts || {});
+    sendMessageSafely({ action: "getCounts" }, (response) => {
+      resolve(response?.counts || {});
     });
   });
 }
 
 async function saveCounts(counts) {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(
-      { action: "updateCounts", counts },
-      () => resolve()
-    );
+    sendMessageSafely({ action: "updateCounts", counts }, () => resolve());
   });
 }
 
 async function getThreshold() {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ action: "getThreshold" }, (response) => {
-      if (chrome.runtime.lastError || !response) {
-        resolve(5);
-        return;
-      }
-
-      resolve(response.threshold || 5);
+    sendMessageSafely({ action: "getThreshold" }, (response) => {
+      resolve(response?.threshold || 5);
     });
   });
 }
 
 async function getDecayDays() {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ action: "getDecayDays" }, (response) => {
-      if (chrome.runtime.lastError || !response) {
-        resolve(0);
-        return;
-      }
-
-      resolve(Number.isFinite(response.decayDays) ? response.decayDays : 0);
+    sendMessageSafely({ action: "getDecayDays" }, (response) => {
+      resolve(Number.isFinite(response?.decayDays) ? response.decayDays : 0);
     });
   });
 }
@@ -508,28 +556,52 @@ function restoreCardVisibility(card) {
   if (container.dataset.ytExtHidden === "true") {
     container.style.display = "";
     delete container.dataset.ytExtHidden;
+
+    return true;
   }
+
+  return false;
+}
+
+// Settings changes must clear the per-card markers first. processVideos() skips
+// any card whose ytExtRenderedVideoId still matches, so without this a new
+// threshold or pause state only reaches cards that scroll in afterwards.
+function reprocessAllCards() {
+  resetProcessedCards();
+  processVideos();
 }
 
 function compactHomeGrid() {
   const rows = document.querySelectorAll("ytd-rich-grid-row");
 
   for (const row of rows) {
-    const items = row.querySelectorAll("ytd-rich-item-renderer");
+    const items = Array.from(row.querySelectorAll("ytd-rich-item-renderer"));
 
     for (const item of items) {
-      if (item.style.display === "none" || !findVideoLink(item)) {
+      // Cards this extension hid stay in the DOM so that raising the threshold,
+      // pausing blocking, or allowlisting can bring them back without a reload.
+      // Only genuinely empty items are discarded.
+      if (item.dataset.ytExtHidden !== "true" && !findVideoLink(item)) {
         item.remove();
       }
     }
 
-    if (!row.querySelector("ytd-rich-item-renderer")) {
-      row.remove();
+    const hasVisibleItem = items.some(
+      (item) => item.parentElement === row && item.dataset.ytExtHidden !== "true"
+    );
+
+    // Collapse a fully hidden row rather than removing it, for the same reason.
+    if (!hasVisibleItem) {
+      row.style.display = "none";
+      row.dataset.ytExtHidden = "true";
+    } else if (row.dataset.ytExtHidden === "true") {
+      row.style.display = "";
+      delete row.dataset.ytExtHidden;
     }
   }
 }
 async function fastBlockAlreadyBlocked() {
-  if (!isHomePage() || !countsCache) {
+  if (!isExtensionAlive() || !isHomePage() || !countsCache) {
     return;
   }
 
@@ -607,6 +679,12 @@ function refreshHomeGridLayout() {
 }
 
 async function processVideos() {
+  if (!isExtensionAlive()) {
+    handleInvalidatedContext();
+    isProcessing = false;
+    return;
+  }
+
   if (!isHomePage() || (PAUSE_TRACKING && PAUSE_BLOCKING)) {
     isProcessing = false;
     return;
@@ -630,7 +708,7 @@ async function processVideos() {
     }
 
     const cards = findCards();
-    let removedAnyCard = false;
+    let changedAnyCard = false;
 
     log("PROCESSING CARDS:", cards.length);
 
@@ -695,15 +773,17 @@ async function processVideos() {
         !(channelInfo?.channelId && isAllowlistedChannel(channelInfo.channelId))
       ) {
         removeCardFromLayout(card);
-        removedAnyCard = true;
+        changedAnyCard = true;
 
         log(`HIDING ${videoId}`);
-      } else {
-        restoreCardVisibility(card);
+      } else if (restoreCardVisibility(card)) {
+        // Revealing has to refresh the grid too, so rows collapsed while the
+        // card was hidden open back up.
+        changedAnyCard = true;
       }
     }
 
-    if (removedAnyCard) {
+    if (changedAnyCard) {
       refreshHomeGridLayout();
     }
 
@@ -734,6 +814,13 @@ function scheduleProcessVideos(delay = 150) {
 let wasActive = false;
 
 function runPass() {
+  // Catches an orphaned script on the next mutation even if it never sends a
+  // message, so it tears itself down instead of running for the tab's lifetime.
+  if (!isExtensionAlive()) {
+    handleInvalidatedContext();
+    return;
+  }
+
   if (!isHomePage()) {
     if (wasActive) {
       wasActive = false;
@@ -765,7 +852,7 @@ observer.observe(document.body, {
 // rather than waiting for the next stray mutation.
 window.addEventListener("yt-navigate-finish", runPass);
 
-chrome.storage.local.get(["pauseTracking", "pauseBlocking", "pauseAll", "allowlistedVideos", "allowlistedChannels"], (res) => {
+function init(res) {
   const legacyPauseAll = res.pauseAll !== undefined ? !!res.pauseAll : false;
   PAUSE_TRACKING = res.pauseTracking !== undefined ? res.pauseTracking : legacyPauseAll;
   PAUSE_BLOCKING = res.pauseBlocking !== undefined ? res.pauseBlocking : legacyPauseAll;
@@ -793,18 +880,29 @@ chrome.storage.local.get(["pauseTracking", "pauseBlocking", "pauseAll", "allowli
       processVideos();
     }
   });
-});
+}
+
+if (isExtensionAlive()) {
+  try {
+    chrome.storage.local.get(
+      ["pauseTracking", "pauseBlocking", "pauseAll", "allowlistedVideos", "allowlistedChannels"],
+      (res) => init(res || {})
+    );
+  } catch (e) {
+    handleInvalidatedContext();
+  }
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "thresholdChanged") {
     THRESHOLD = message.threshold;
-    processVideos();
+    reprocessAllCards();
   } else if (message.action === "decayDaysChanged") {
     DECAY_DAYS = Number.isFinite(message.decayDays) ? message.decayDays : 0;
     if (decayCountsCache()) {
       scheduleCountsSave();
     }
-    processVideos();
+    reprocessAllCards();
   } else if (message.action === "pauseStatesChanged") {
     const s = message.states || {};
     PAUSE_TRACKING = !!s.pauseTracking;
@@ -815,8 +913,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (PAUSE_TRACKING && PAUSE_BLOCKING) {
-      restoreAllCards();
+      restoreHiddenByExtension();
+      resetProcessedCards();
     } else {
+      resetProcessedCards();
       fastBlockAlreadyBlocked();
       processVideos();
     }
@@ -838,6 +938,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "allowlistUpdated") {
     ALLOWLISTED_VIDEOS = message.videos || [];
     ALLOWLISTED_CHANNELS = message.channels || [];
-    processVideos();
+    reprocessAllCards();
   }
 });
