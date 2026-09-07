@@ -76,6 +76,42 @@ function isAllowlistedChannel(channelId) {
   return ALLOWLISTED_CHANNELS.some((item) => item && item.id === channelId);
 }
 
+// Only the home feed is tracked or filtered. The content script still has to
+// load on every YouTube page, because YouTube is a single-page app: a script
+// injected only at "/" would never run for someone who lands on a watch page
+// and then navigates home.
+function isHomePage() {
+  return window.location.pathname === "/";
+}
+
+function removeExtensionUi() {
+  const injected = document.querySelectorAll(
+    ".yt-extension-count-badge, .yt-extension-allow-buttons"
+  );
+
+  for (const node of injected) {
+    node.remove();
+  }
+}
+
+// Restores only what this extension hid. restoreAllCards() clears any inline
+// display:none it finds, which off the home feed could reveal something YouTube
+// itself meant to keep hidden.
+function restoreHiddenByExtension() {
+  const hidden = document.querySelectorAll('[data-yt-ext-hidden="true"]');
+
+  for (const container of hidden) {
+    container.style.display = "";
+    delete container.dataset.ytExtHidden;
+  }
+}
+
+function deactivate() {
+  restoreHiddenByExtension();
+  removeExtensionUi();
+  resetProcessedCards();
+}
+
 function getCardContainer(card) {
   return card.closest(
     "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
@@ -493,7 +529,7 @@ function compactHomeGrid() {
   }
 }
 async function fastBlockAlreadyBlocked() {
-  if (!countsCache) {
+  if (!isHomePage() || !countsCache) {
     return;
   }
 
@@ -571,7 +607,7 @@ function refreshHomeGridLayout() {
 }
 
 async function processVideos() {
-  if (PAUSE_TRACKING && PAUSE_BLOCKING) {
+  if (!isHomePage() || (PAUSE_TRACKING && PAUSE_BLOCKING)) {
     isProcessing = false;
     return;
   }
@@ -581,6 +617,9 @@ async function processVideos() {
     return;
   }
 
+  // Mark active here rather than only in runPass, so anything this touches is
+  // torn down on navigation no matter which entry point started the pass.
+  wasActive = true;
   isProcessing = true;
 
   try {
@@ -690,7 +729,22 @@ function scheduleProcessVideos(delay = 150) {
   }, delay);
 }
 
-const observer = new MutationObserver(() => {
+// Tracks whether the last run touched the page, so leaving the home feed tears
+// down injected UI exactly once instead of on every mutation.
+let wasActive = false;
+
+function runPass() {
+  if (!isHomePage()) {
+    if (wasActive) {
+      wasActive = false;
+      deactivate();
+    }
+
+    return;
+  }
+
+  wasActive = true;
+
   if (PAUSE_ALL) {
     restoreAllCards();
   } else {
@@ -698,12 +752,18 @@ const observer = new MutationObserver(() => {
     compactHomeGrid();
     scheduleProcessVideos(150);
   }
-});
+}
+
+const observer = new MutationObserver(runPass);
 
 observer.observe(document.body, {
   childList: true,
   subtree: true
 });
+
+// YouTube swaps pages without a reload, so react to its own navigation event
+// rather than waiting for the next stray mutation.
+window.addEventListener("yt-navigate-finish", runPass);
 
 chrome.storage.local.get(["pauseTracking", "pauseBlocking", "pauseAll", "allowlistedVideos", "allowlistedChannels"], (res) => {
   const legacyPauseAll = res.pauseAll !== undefined ? !!res.pauseAll : false;
@@ -719,6 +779,12 @@ chrome.storage.local.get(["pauseTracking", "pauseBlocking", "pauseAll", "allowli
     if (decayCountsCache()) {
       scheduleCountsSave();
     }
+
+    if (!isHomePage()) {
+      return;
+    }
+
+    wasActive = true;
 
     if (PAUSE_TRACKING && PAUSE_BLOCKING) {
       restoreAllCards();
@@ -743,6 +809,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const s = message.states || {};
     PAUSE_TRACKING = !!s.pauseTracking;
     PAUSE_BLOCKING = !!s.pauseBlocking;
+
+    if (!isHomePage()) {
+      return;
+    }
+
     if (PAUSE_TRACKING && PAUSE_BLOCKING) {
       restoreAllCards();
     } else {
